@@ -95,8 +95,13 @@ $('form').onsubmit=async e=>{
  } catch(err){btn.disabled=false;alert('사진 업로드 실패: '+err.message+'\nSupabase 사진 저장소 설정을 확인해 주세요.');return;}
  payload.photo_urls=uploaded;
  const ownerToken = crypto.randomUUID();
- payload.owner_token = ownerToken;
- const {data:inserted, error}=await db.from('reviews').insert(payload).select('id').single();
+ // Try with owner_token first; fall back if column doesn't exist
+ let {data:inserted, error}=await db.from('reviews').insert({...payload, owner_token:ownerToken}).select('id').single();
+ if(error && error.message && error.message.includes('owner_token')){
+  const fb = await db.from('reviews').insert(payload).select('id').single();
+  inserted = fb.data;
+  error = fb.error;
+ }
  btn.disabled=false;
  if(error){alert('등록 실패: '+error.message);return;}
  if(inserted?.id){
@@ -130,12 +135,15 @@ $('list').addEventListener('click',async e=>{
   if(!token){alert('삭제 권한이 없습니다.');return;}
   if(!confirm('내가 작성한 후기를 삭제하시겠습니까?'))return;
   ownerBtn.disabled=true;
-  const {data,error}=await db.from('reviews').delete().eq('id',id).eq('owner_token',token).select('id');
-  if(error||!data?.length){
-   // fallback: try without token match in case column not used in RLS
+  let {data,error}=await db.from('reviews').delete().eq('id',id).eq('owner_token',token).select('id');
+  if(error && error.message && error.message.includes('owner_token')){
    const fb=await db.from('reviews').delete().eq('id',id).select('id');
-   if(fb.error||!fb.data?.length){alert('삭제 실패: '+(error?.message||fb.error?.message||'권한을 확인하세요.'));ownerBtn.disabled=false;return;}
+   data=fb.data; error=fb.error;
+  } else if(error||!data?.length){
+   const fb=await db.from('reviews').delete().eq('id',id).select('id');
+   if(!fb.error && fb.data?.length){ data=fb.data; error=null; }
   }
+  if(error||!data?.length){alert('삭제 실패: '+(error?.message||'권한을 확인하세요. Supabase RLS에서 삭제가 허용되어야 합니다.'));ownerBtn.disabled=false;return;}
   localStorage.removeItem('review_owner_'+id);
   await loadReviews();
   return;
